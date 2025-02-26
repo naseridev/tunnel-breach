@@ -170,5 +170,5 @@ cython_debug/
 # PyPI configuration file
 .pypirc
 
-# Tunnel Breach 
-_log/
+# Tunnel Breach
+_logs/
