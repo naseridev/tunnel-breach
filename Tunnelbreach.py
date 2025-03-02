@@ -9,15 +9,24 @@ import platform
 import argparse
 import logging
 import sys
+import os
 from time import strftime, localtime, sleep
 from datetime import datetime
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor
+from logging.handlers import RotatingFileHandler
+import contextlib
 
 class Tunnelbreach:
 
-    DEFAULT_PORT = 22
+    DEFAULT_PORT = 2222
     STAT_INTERVAL = 5
     CONSOLE_DATA_MAX_LENGTH = 80
+    MAX_THREAD_WORKERS = 20
+    MAX_CONNECTIONS = 100
+    CONNECTION_TIMEOUT = 5
+    MAX_LOG_SIZE = 10 * 1024 * 1024
+    MAX_LOG_FILES = 5
 
     SSH_BANNERS = [
         b'SSH-2.0-OpenSSH_7.4p1 Debian-10',
@@ -35,15 +44,18 @@ class Tunnelbreach:
         b'Warning: Unauthorized access is prohibited. This system is monitored.'
     ]
 
-    def __init__(self, port=DEFAULT_PORT, stealth_mode=False):
-
-        self.port = port
+    def __init__(self, port=None, stealth_mode=False, max_workers=None, max_connections=None):
+        self.port = port if port is not None else self.DEFAULT_PORT
         self.verbose = not stealth_mode
         self.running = False
         self.connections_logged = 0
         self.attacker_ips = {}
         self.banner = random.choice(self.SSH_BANNERS)
         self.response = random.choice(self.SSH_RESPONSES)
+        self.max_workers = max_workers if max_workers is not None else self.MAX_THREAD_WORKERS
+        self.max_connections = max_connections if max_connections is not None else self.MAX_CONNECTIONS
+        self.connection_semaphore = threading.Semaphore(self.max_connections)
+        self.lock = threading.Lock()
 
         self.setup_terminal_colors()
         self.setup_logging()
@@ -51,13 +63,16 @@ class Tunnelbreach:
     def setup_terminal_colors(self):
         self.colors_enabled = True
 
-        if platform.system() == 'Windows':
+        if os.environ.get('NO_COLOR') is not None:
+            self.colors_enabled = False
+        elif platform.system() == 'Windows':
             try:
                 import ctypes
                 kernel32 = ctypes.windll.kernel32
                 kernel32.SetConsoleMode(kernel32.GetStdHandle(-11), 7)
-            except:
+            except Exception as e:
                 self.colors_enabled = False
+                logging.warning(f'Could not enable colors on Windows terminal: {e}')
 
         self.COLOR_BLUE = '\033[94m' if self.colors_enabled else ''
         self.COLOR_RED = '\033[91m' if self.colors_enabled else ''
@@ -73,20 +88,44 @@ class Tunnelbreach:
         timestamp = strftime('%Y%m%d_%H%M%S', localtime())
         self.log_file = self.log_dir / f'honeypot_{timestamp}.log'
 
-        logging.basicConfig(
+        root_logger = logging.getLogger()
+        root_logger.setLevel(logging.INFO)
+
+        for handler in root_logger.handlers[:]:
+            root_logger.removeHandler(handler)
+
+        file_handler = RotatingFileHandler(
             filename=self.log_file,
-            level=logging.INFO,
-            format='[%(asctime)s] %(message)s',
+            maxBytes=self.MAX_LOG_SIZE,
+            backupCount=self.MAX_LOG_FILES,
+            encoding='utf-8'
+        )
+
+        file_formatter = logging.Formatter(
+            '[%(asctime)s] %(levelname)s: %(message)s',
             datefmt='%Y-%m-%d %H:%M:%S'
         )
 
+        file_handler.setFormatter(file_formatter)
+        root_logger.addHandler(file_handler)
+
+        console_handler = logging.StreamHandler()
+        console_handler.setLevel(logging.ERROR)
+
+        console_formatter = logging.Formatter(
+            '%(levelname)s: %(message)s'
+        )
+        console_handler.setFormatter(console_formatter)
+        root_logger.addHandler(console_handler)
+
         logging.info('Honeypot Started')
         logging.info(f'Listening on port {self.port}')
+        logging.info(f'Max concurrent connections: {self.max_connections}')
+        logging.info(f'Thread pool size: {self.max_workers}')
 
         self.print_status(f'Log file created: {self.log_file}', 'success')
 
     def print_status(self, message, message_type='info'):
-
         if message_type == 'info':
             prefix = '[*]'
             color = self.COLOR_BLUE
@@ -115,22 +154,36 @@ class Tunnelbreach:
             color = self.COLOR_PURPLE
             print(f'{color}{prefix}{self.COLOR_RESET} {message}')
 
+    def sanitize_log_data(self, data_str):
+        if not data_str:
+            return ''
+
+        sanitized = re.sub(r'[\x00-\x1F\x7F-\x9F]', '', data_str)
+
+        max_length = 1000
+        if len(sanitized) > max_length:
+            sanitized = sanitized[:max_length] + '... (truncated)'
+
+        return sanitized
+
     def log_connection(self, ip, port, data=None):
-        self.connections_logged += 1
+        with self.lock:
+            self.connections_logged += 1
+            if ip in self.attacker_ips:
+                self.attacker_ips[ip] += 1
+            else:
+                self.attacker_ips[ip] = 1
 
-        if ip in self.attacker_ips:
-            self.attacker_ips[ip] += 1
-        else:
-            self.attacker_ips[ip] = 1
-
-        timestamp = strftime('%Y-%m-%d %H:%M:%S', localtime())
         log_entry = f'Connection from {ip}:{port} (Attempt #{self.attacker_ips[ip]})'
         display_entry = log_entry
 
         clean_data = ''
+
         if data:
             try:
-                clean_data = re.sub(r'[^\x20-\x7E]', '', data.decode('utf-8', errors='ignore')).strip()
+                decoded_data = data.decode('utf-8', errors='ignore').strip()
+                clean_data = self.sanitize_log_data(decoded_data)
+
                 if clean_data:
                     log_entry += f' - Data: {clean_data}'
 
@@ -139,11 +192,10 @@ class Tunnelbreach:
                         display_entry += f' - Data: {truncated_data}'
                     else:
                         display_entry += f' - Data: {clean_data}'
-            except:
-                pass
+            except Exception as e:
+                logging.error(f'Error processing data from {ip}:{port}: {e}')
 
         logging.info(log_entry)
-
         self.print_status(display_entry, 'connection')
 
         if self.connections_logged % self.STAT_INTERVAL == 0:
@@ -154,13 +206,12 @@ class Tunnelbreach:
             return
 
         self.print_status('-' * 60, 'info')
-        self.print_status(f'STATISTICS UPDATE', 'warning')
+        self.print_status('STATISTICS UPDATE', 'warning')
         self.print_status(f'Total connections logged: {self.connections_logged}', 'info')
 
         if self.attacker_ips:
             top_attackers = sorted(self.attacker_ips.items(), key=lambda x: x[1], reverse=True)[:5]
-
-            self.print_status(f'Top 5 attackers:', 'warning')
+            self.print_status('Top 5 attackers:', 'warning')
             for i, (ip, count) in enumerate(top_attackers, 1):
                 self.print_status(f'  {i}. {ip:15} - {count} attempts', 'info')
 
@@ -168,6 +219,15 @@ class Tunnelbreach:
         self.print_status('-' * 60, 'info')
 
     def handle_connection(self, client_socket, client_address):
+        acquired = self.connection_semaphore.acquire(blocking=False)
+        if not acquired:
+            logging.warning(f'Connection limit reached, rejecting connection from {client_address}')
+            try:
+                client_socket.close()
+            except:
+                pass
+            return
+
         try:
             ip, port = client_address
             self.log_connection(ip, port)
@@ -175,111 +235,119 @@ class Tunnelbreach:
             sleep(random.uniform(0.1, 0.5))
             client_socket.sendall(self.banner + b'\r\n')
 
-            try:
-                client_socket.settimeout(5)
+            with contextlib.suppress(Exception):
+                client_socket.settimeout(self.CONNECTION_TIMEOUT)
                 data = client_socket.recv(1024)
-
                 if data:
                     self.log_connection(ip, port, data)
-            except:
-                pass
 
             sleep(random.uniform(0.5, 2.0))
-            client_socket.sendall(self.response + b'\r\n')
+            with contextlib.suppress(Exception):
+                client_socket.sendall(self.response + b'\r\n')
 
             for _ in range(random.randint(1, 2)):
                 try:
-                    client_socket.settimeout(5)
+                    client_socket.settimeout(self.CONNECTION_TIMEOUT)
                     data = client_socket.recv(1024)
-
                     if data:
                         self.log_connection(ip, port, data)
                         sleep(random.uniform(0.5, 1.5))
-
                         client_socket.sendall(random.choice(self.SSH_RESPONSES) + b'\r\n')
-                except:
+                except Exception as e:
+                    logging.debug(f'Error during further communication with {ip}:{port}: {e}')
                     break
 
             sleep(random.uniform(0.3, 1.0))
 
         except Exception as e:
             self.print_status(f'Connection error from {client_address}: {e}', 'error')
-
+            logging.error(f'Connection handler error from {client_address}: {e}')
         finally:
             try:
                 client_socket.close()
-            except:
-                pass
+            except Exception as e:
+                logging.debug(f'Error closing client socket from {client_address}: {e}')
+            self.connection_semaphore.release()
 
     def print_summary(self, start_time, runtime_str):
         if self.verbose:
             print()
 
         self.print_status('-' * 70, 'warning')
-        self.print_status(f'HONEYPOT SESSION SUMMARY', 'success')
-        self.print_status(f'Started: {start_time.strftime('%Y-%m-%d %H:%M:%S')}', 'info')
+        self.print_status('HONEYPOT SESSION SUMMARY', 'success')
+        self.print_status(f'Started: {start_time.strftime("%Y-%m-%d %H:%M:%S")}', 'info')
         self.print_status(f'Duration: {runtime_str}', 'info')
         self.print_status(f'Total connections: {self.connections_logged}', 'info')
         self.print_status(f'Unique IPs detected: {len(self.attacker_ips)}', 'info')
 
         if self.attacker_ips:
-            self.print_status(f'Attack breakdown:', 'warning')
+            self.print_status('Attack breakdown:', 'warning')
             for i, (ip, count) in enumerate(sorted(self.attacker_ips.items(), key=lambda x: x[1], reverse=True)[:10], 1):
-                percentage = (count/self.connections_logged*100) if self.connections_logged > 0 else 0
+                percentage = (count / self.connections_logged * 100) if self.connections_logged > 0 else 0
                 self.print_status(f'  {i}. {ip:15} - {count} attempts ({percentage:.1f}%)', 'info')
 
         self.print_status('-' * 70, 'warning')
 
     def start(self):
-        try:
-            server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            server_socket.bind(('0.0.0.0', self.port))
-            server_socket.listen(10)
-            server_socket.settimeout(1.0)
-
-        except Exception as e:
-            self.print_status(f'Error: Unable to bind or listen on port {self.port}: {e}', 'error')
-            sys.exit(1)
-
-        self.print_status(f'Honeypot active on port {self.port}...', 'success')
-        self.print_status(f'Press Ctrl+C to exit', 'info')
-
-        if self.verbose:
-            print()
-
         self.running = True
         start_time = datetime.now()
+        executor = None
 
-        def signal_handler():
+        def signal_handler(sig, frame):
             if self.verbose:
                 print()
             self.print_status('Honeypot shutting down...', 'warning')
             self.running = False
 
         signal.signal(signal.SIGINT, signal_handler)
+        signal.signal(signal.SIGTERM, signal_handler)
 
         try:
-            while self.running:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server_socket:
+                server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
                 try:
-                    client_socket, client_address = server_socket.accept()
+                    server_socket.bind(('0.0.0.0', self.port))
+                except OSError as e:
+                    self.print_status(f'Error: Port {self.port} is already in use or requires root privileges: {e}', 'error')
+                    logging.error(f'Failed to bind to port {self.port}: {e}')
+                    sys.exit(1)
 
-                    thread = threading.Thread(
-                        target=self.handle_connection,
-                        args=(client_socket, client_address)
-                    )
-                    thread.daemon = True
-                    thread.start()
+                server_socket.listen(self.max_connections)
+                server_socket.settimeout(1.0)
 
-                except socket.timeout:
-                    continue
+                self.print_status(f'Honeypot active on port {self.port}...', 'success')
+                self.print_status(f'Max concurrent connections: {self.max_connections}', 'info')
+                self.print_status(f'Thread pool size: {self.max_workers}', 'info')
+                self.print_status('Press Ctrl+C to exit', 'info')
+                if self.verbose:
+                    print()
 
-                except Exception as e:
-                    if self.running:
-                        self.print_status(f'Connection error: {e}', 'error')
+                executor = ThreadPoolExecutor(max_workers=self.max_workers)
+
+                while self.running:
+                    try:
+                        client_socket, client_address = server_socket.accept()
+                        executor.submit(self.handle_connection, client_socket, client_address)
+                    except socket.timeout:
+                        continue
+                    except Exception as e:
+                        if self.running:
+                            self.print_status(f'Connection accept error: {e}', 'error')
+                            logging.error(f'Connection accept error: {e}')
 
         except KeyboardInterrupt:
             self.running = False
+        except Exception as e:
+            self.print_status(f'Critical error: {e}', 'error')
+            logging.critical(f'Critical error in main loop: {e}')
+        finally:
+            if executor:
+                self.print_status('Shutting down thread pool...', 'info')
+                executor.shutdown(wait=True)
+
+            wait_time = 3
+            self.print_status(f'Waiting {wait_time} seconds for threads to finish...', 'info')
+            sleep(wait_time)
 
         runtime = datetime.now() - start_time
         hours, remainder = divmod(runtime.seconds, 3600)
@@ -293,24 +361,22 @@ class Tunnelbreach:
             for ip, count in sorted(self.attacker_ips.items(), key=lambda x: x[1], reverse=True):
                 logging.info(f'IP: {ip} - {count} attempts')
 
-        try:
-            server_socket.close()
-            self.print_status('Server socket closed.', 'success')
-            self.print_summary(start_time, runtime_str)
-
-        except Exception as e:
-            self.print_status(f'Error closing server socket: {e}', 'error')
-
+        self.print_status('Server socket closed.', 'success')
+        self.print_summary(start_time, runtime_str)
 
 def main():
     parser = argparse.ArgumentParser(description='SSH Honeypot - Simulate a vulnerable SSH server')
     subparsers = parser.add_subparsers(dest='command')
 
     run_parser = subparsers.add_parser('run', help='Start the honeypot')
-    run_parser.add_argument('port', type=int, nargs='?', default=Tunnelbreach.DEFAULT_PORT,
+    run_parser.add_argument('-p', '--port', type=int, default=Tunnelbreach.DEFAULT_PORT,
                           help=f'Port number (default: {Tunnelbreach.DEFAULT_PORT})')
     run_parser.add_argument('-s', '--stealth', action='store_true',
                           help='Run in stealth mode with minimal output')
+    run_parser.add_argument('-w', '--workers', type=int, default=Tunnelbreach.MAX_THREAD_WORKERS,
+                          help=f'Maximum number of worker threads (default: {Tunnelbreach.MAX_THREAD_WORKERS})')
+    run_parser.add_argument('-c', '--connections', type=int, default=Tunnelbreach.MAX_CONNECTIONS,
+                          help=f'Maximum number of concurrent connections (default: {Tunnelbreach.MAX_CONNECTIONS})')
 
     args = parser.parse_args()
 
@@ -318,9 +384,14 @@ def main():
         parser.print_help()
         sys.exit(0)
 
-    honeypot = Tunnelbreach(port=args.port, stealth_mode=args.stealth)
-    honeypot.start()
+    honeypot = Tunnelbreach(
+        port=args.port,
+        stealth_mode=args.stealth,
+        max_workers=args.workers,
+        max_connections=args.connections
+    )
 
+    honeypot.start()
 
 if __name__ == '__main__':
     main()
