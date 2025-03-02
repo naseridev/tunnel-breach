@@ -1,100 +1,106 @@
-# TunnelBreach SSH Honeypot
+# Tunnelbreach - SSH Honeypot
 
-TunnelBreach is a lightweight, configurable SSH honeypot designed to detect, monitor, and log unauthorized SSH connection attempts. By simulating a vulnerable SSH server, it helps security researchers and system administrators understand attack patterns and monitor potential threats.
+## Overview
+
+Tunnelbreach is a Python-based SSH honeypot designed to simulate a vulnerable SSH server. This tool has been developed for research and educational purposes in the field of cybersecurity within academic environments, allowing researchers to study and analyze intrusion techniques.
 
 ## Features
 
-- **Easy Deployment:** Simple setup with minimal configuration required
-- **Customizable SSH Banners:** Randomly selects from common SSH server banners to appear authentic
-- **Detailed Logging:** Records all connection attempts with timestamps, IP addresses, and attempted credentials
-- **Real-time Monitoring:** Shows connection attempts as they happen with color-coded terminal output
-- **Statistical Analysis:** Tracks top attackers and provides summary statistics
-- **Stealth Mode:** Option to run with minimal console output for quiet operation
-
-## Requirements
-
-- Python 3.6 or higher
-- Standard Python libraries (all included in the script)
+- **SSH Server Simulation**: Provides responses similar to real SSH servers
+- **Connection Logging**: Documents all connection attempts and transmitted data
+- **Automatic Log Rotation**: Manages log files with a rotation system
+- **Real-time Statistics**: Displays activity statistics and attacker IPs
+- **Concurrent Connection Management**: Controls the number of simultaneous connections
+- **Customizable Responses**: Randomized SSH banners and authentication failure messages
+- **Thread Pool Management**: Efficient handling of multiple connection attempts
 
 ## Installation
 
-Clone the repository:
+Clone the repository (if using version control)
 
 ```bash
-git clone https://github.com/naseridev/TunnelBreach
-cd TunnelBreach
+git clone https://github.com/yourusername/tunnelbreach.git
+cd tunnelbreach
 ```
 
-No additional installation steps are required as the script uses only standard Python libraries.
+Make the script executable
+
+```bash
+chmod +x tunnelbreach.py
+```
 
 ## Usage
 
-### Basic Usage
-
-Run the honeypot on the default SSH port (22):
+Tunnelbreach can be run with various command-line options to customize its behavior:
 
 ```bash
-sudo python3 Tunnelbreach.py run
+./tunnelbreach.py run [OPTIONS]
 ```
 
-*Note: Running on ports below 1024 (like the default port 22) requires root/administrator privileges.*
+### Command-line Options
 
-### Custom Port
+| Option | Description |
+|--------|-------------|
+| `-p, --port PORT` | Port number to listen on (default: 22) |
+| `-s, --stealth` | Run in stealth mode with minimal output |
+| `-w, --workers WORKERS` | Maximum number of worker threads (default: 20) |
+| `-c, --connections CONNECTIONS` | Maximum number of concurrent connections (default: 100) |
 
-Run the honeypot on a custom port:
+### Examples
 
+Run with default settings (requires root privileges for port 22):
 ```bash
-python3 Tunnelbreach.py run 2222
+sudo ./tunnelbreach.py run
 ```
 
-### Stealth Mode
-
-Run with minimal console output:
-
+Run on a non-privileged port:
 ```bash
-python3 Tunnelbreach.py run --stealth
+./tunnelbreach.py run -p 2222
 ```
 
-Or with a custom port:
-
+Run in stealth mode with increased capacity:
 ```bash
-python3 Tunnelbreach.py run 2222 --stealth
+./tunnelbreach.py run -s -w 50 -c 200
 ```
 
 ## Log Files
 
-All connection attempts are logged to the `_logs` directory in the format `honeypot_YYYYMMDD_HHMMSS.log`. These logs contain:
+Log files are stored in the `_logs` directory with the following naming convention:
+```
+honeypot_YYYYMMDD_HHMMSS.log
+```
 
+The logs contain detailed information about connection attempts, including:
+- IP addresses and ports
 - Timestamp of connection
-- Source IP and port
-- Any data sent by the attacker
-- Number of connection attempts from each IP
-
-## How It Works
-
-TunnelBreach works by:
-
-1. Opening a socket on the specified port
-2. Sending a realistic SSH banner when a connection is received
-3. Logging connection details and any received data
-4. Responding with plausible "access denied" messages
-5. Keeping statistics on connection attempts
+- Data transmitted by attackers
+- System status and errors
 
 ## Security Considerations
 
-- This tool is intended for research and educational purposes only
-- Always deploy honeypots in controlled environments
-- Consider legal and ethical implications before deployment
-- Do not use on production servers without proper isolation
+- **Always run honeypots in a controlled, isolated environment**
+- **Never deploy on production systems**
+- **Regular monitoring is recommended to prevent abuse**
+- **Review logs frequently for potential security insights**
 
-## Customization
+## Academic Usage
 
-You can modify the SSH banners and responses by editing the `SSH_BANNERS` and `SSH_RESPONSES` lists in the script.
+This tool is particularly suitable for:
+- Cybersecurity courses and labs
+- Network security research
+- Threat intelligence gathering
+- Behavioral analysis of SSH-targeting attacks
+
+## Requirements
+
+- Python 3.6 or higher
+- Privileged access (if using port numbers below 1024)
+- Compatible with Linux, macOS, and Windows
 
 ## Disclaimer
 
-This tool is for educational and research purposes only. The developers assume no liability and are not responsible for any misuse or damage caused by this program.
+This software is provided for educational and research purposes only. The authors are not responsible for any misuse or damage caused by this program. Always ensure you have proper authorization before deploying honeypots on any network.
 
 ## Contributing
 
-Contributions, issues, and feature requests are welcome! Feel free to check the [issues page](https://github.com/naseridev/TunnelBreach/issues).
+Contributions are welcome! Please feel free to submit a Pull Request.

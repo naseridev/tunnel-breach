@@ -369,6 +369,7 @@ def main():
     subparsers = parser.add_subparsers(dest='command')
 
     run_parser = subparsers.add_parser('run', help='Start the honeypot')
+
     run_parser.add_argument('-p', '--port', type=int, default=Tunnelbreach.DEFAULT_PORT,
                           help=f'Port number (default: {Tunnelbreach.DEFAULT_PORT})')
     run_parser.add_argument('-s', '--stealth', action='store_true',
