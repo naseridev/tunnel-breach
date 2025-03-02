@@ -19,7 +19,7 @@ import contextlib
 
 class Tunnelbreach:
 
-    DEFAULT_PORT = 2222
+    DEFAULT_PORT = 22
     STAT_INTERVAL = 5
     CONSOLE_DATA_MAX_LENGTH = 80
     MAX_THREAD_WORKERS = 20
