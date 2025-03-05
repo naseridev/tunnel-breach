@@ -16,6 +16,7 @@ from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 from logging.handlers import RotatingFileHandler
 import contextlib
+from typing import Tuple, Optional
 
 class Tunnelbreach:
 
@@ -44,7 +45,7 @@ class Tunnelbreach:
         b'Warning: Unauthorized access is prohibited. This system is monitored.'
     ]
 
-    def __init__(self, port=None, stealth_mode=False, max_workers=None, max_connections=None):
+    def __init__(self, port: Optional[int] = None, stealth_mode: bool = False, max_workers: Optional[int] = None, max_connections: Optional[int] = None) -> None:
         self.port = port if port is not None else self.DEFAULT_PORT
         self.verbose = not stealth_mode
         self.running = False
@@ -60,7 +61,7 @@ class Tunnelbreach:
         self.setup_terminal_colors()
         self.setup_logging()
 
-    def setup_terminal_colors(self):
+    def setup_terminal_colors(self) -> None:
         self.colors_enabled = True
 
         if os.environ.get('NO_COLOR') is not None:
@@ -81,7 +82,7 @@ class Tunnelbreach:
         self.COLOR_PURPLE = '\033[95m' if self.colors_enabled else ''
         self.COLOR_RESET = '\033[0m' if self.colors_enabled else ''
 
-    def setup_logging(self):
+    def setup_logging(self) -> None:
         self.log_dir = Path(__file__).parent / '_logs'
         self.log_dir.mkdir(exist_ok=True)
 
@@ -125,7 +126,7 @@ class Tunnelbreach:
 
         self.print_status(f'Log file created: {self.log_file}', 'success')
 
-    def print_status(self, message, message_type='info'):
+    def print_status(self, message: str, message_type: str = 'info') -> None:
         if message_type == 'info':
             prefix = '[*]'
             color = self.COLOR_BLUE
@@ -154,7 +155,7 @@ class Tunnelbreach:
             color = self.COLOR_PURPLE
             print(f'{color}{prefix}{self.COLOR_RESET} {message}')
 
-    def sanitize_log_data(self, data_str):
+    def sanitize_log_data(self, data_str: Optional[str]) -> str:
         if not data_str:
             return ''
 
@@ -166,7 +167,7 @@ class Tunnelbreach:
 
         return sanitized
 
-    def log_connection(self, ip, port, data=None):
+    def log_connection(self, ip: str, port: int, data: Optional[bytes] = None) -> None:
         with self.lock:
             self.connections_logged += 1
             if ip in self.attacker_ips:
@@ -201,7 +202,7 @@ class Tunnelbreach:
         if self.connections_logged % self.STAT_INTERVAL == 0:
             self.print_statistics()
 
-    def print_statistics(self):
+    def print_statistics(self) -> None:
         if not self.verbose:
             return
 
@@ -218,13 +219,13 @@ class Tunnelbreach:
         self.print_status(f'Unique IPs detected: {len(self.attacker_ips)}', 'info')
         self.print_status('-' * 60, 'info')
 
-    def handle_connection(self, client_socket, client_address):
+    def handle_connection(self, client_socket: socket.socket, client_address: Tuple[str, int]) -> None:
         acquired = self.connection_semaphore.acquire(blocking=False)
         if not acquired:
             logging.warning(f'Connection limit reached, rejecting connection from {client_address}')
             try:
                 client_socket.close()
-            except:
+            except Exception:
                 pass
             return
 
@@ -235,15 +236,19 @@ class Tunnelbreach:
             sleep(random.uniform(0.1, 0.5))
             client_socket.sendall(self.banner + b'\r\n')
 
-            with contextlib.suppress(Exception):
+            try:
                 client_socket.settimeout(self.CONNECTION_TIMEOUT)
                 data = client_socket.recv(1024)
                 if data:
                     self.log_connection(ip, port, data)
+            except (socket.timeout, socket.error) as e:
+                logging.debug(f'Error receiving initial data from {ip}:{port}: {e}')
 
             sleep(random.uniform(0.5, 2.0))
-            with contextlib.suppress(Exception):
+            try:
                 client_socket.sendall(self.response + b'\r\n')
+            except (socket.timeout, socket.error) as e:
+                logging.debug(f'Error sending response to {ip}:{port}: {e}')
 
             for _ in range(random.randint(1, 2)):
                 try:
@@ -253,7 +258,7 @@ class Tunnelbreach:
                         self.log_connection(ip, port, data)
                         sleep(random.uniform(0.5, 1.5))
                         client_socket.sendall(random.choice(self.SSH_RESPONSES) + b'\r\n')
-                except Exception as e:
+                except (socket.timeout, socket.error) as e:
                     logging.debug(f'Error during further communication with {ip}:{port}: {e}')
                     break
 
@@ -269,7 +274,7 @@ class Tunnelbreach:
                 logging.debug(f'Error closing client socket from {client_address}: {e}')
             self.connection_semaphore.release()
 
-    def print_summary(self, start_time, runtime_str):
+    def print_summary(self, start_time: datetime, runtime_str: str) -> None:
         if self.verbose:
             print()
 
@@ -288,12 +293,12 @@ class Tunnelbreach:
 
         self.print_status('-' * 70, 'warning')
 
-    def start(self):
+    def start(self) -> None:
         self.running = True
         start_time = datetime.now()
-        executor = None
+        executor: Optional[ThreadPoolExecutor] = None
 
-        def signal_handler(sig, frame):
+        def signal_handler(sig, frame) -> None:
             if self.verbose:
                 print()
             self.print_status('Honeypot shutting down...', 'warning')
@@ -364,7 +369,7 @@ class Tunnelbreach:
         self.print_status('Server socket closed.', 'success')
         self.print_summary(start_time, runtime_str)
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description='SSH Honeypot - Simulate a vulnerable SSH server')
     subparsers = parser.add_subparsers(dest='command')
 
