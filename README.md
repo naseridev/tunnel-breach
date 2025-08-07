@@ -19,7 +19,7 @@ Tunnelbreach is a Python-based SSH honeypot designed to simulate a vulnerable SS
 Clone the repository (if using version control)
 
 ```bash
-git clone https://github.com/yourusername/tunnelbreach.git
+git clone https://github.com/naseridev/tunnelbreach.git
 cd tunnelbreach
 ```
 
